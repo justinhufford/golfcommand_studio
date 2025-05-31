@@ -20,6 +20,9 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// Set up file structure
+fs.mkdirSync(path.join(__dirname, '../../chats'));
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 800,
