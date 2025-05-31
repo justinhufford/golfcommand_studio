@@ -86,6 +86,7 @@
             const chatItem = document.createElement('p');
             chatItem.textContent = chat.displayName;
             chatItem.className = 'chat-item';
+            chatItem.dataset.chatPath = chat.path; // Store the chat path in dataset
             
             // Add click handler to load the chat
             chatItem.addEventListener('click', async () => {
@@ -94,6 +95,93 @@
                 } catch (error) {
                     console.error('Error loading chat:', error);
                 }
+            });
+
+            // Add right-click context menu handler
+            chatItem.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                // Remove any existing context menus
+                document.querySelectorAll('.context-menu').forEach(el => el.remove());
+                
+                // Create context menu
+                const contextMenu = document.createElement('div');
+                contextMenu.className = 'context-menu';
+                contextMenu.style.position = 'fixed';
+                contextMenu.style.left = `${e.clientX}px`;
+                contextMenu.style.top = `${e.clientY}px`;
+                
+                // Add delete option
+                const deleteOption = document.createElement('div');
+                deleteOption.className = 'context-menu-item';
+                deleteOption.textContent = 'Delete Chat';
+                deleteOption.addEventListener('click', async () => {
+                    try {
+                        const result = await window.electronAPI.deleteChat(chat.path);
+                        if (!result.success) {
+                            console.error('Failed to delete chat:', result.error);
+                        }
+                    } catch (error) {
+                        console.error('Error deleting chat:', error);
+                    }
+                    contextMenu.remove();
+                });
+                
+                contextMenu.appendChild(deleteOption);
+                document.body.appendChild(contextMenu);
+
+                // Adjust position to keep menu within viewport
+                const menuRect = contextMenu.getBoundingClientRect();
+                const viewportWidth = window.innerWidth;
+                const viewportHeight = window.innerHeight;
+
+                let adjustedX = e.clientX;
+                let adjustedY = e.clientY;
+
+                // Check if menu goes off the right edge
+                if (menuRect.right > viewportWidth) {
+                    adjustedX = viewportWidth - menuRect.width - 5; // 5px margin
+                }
+
+                // Check if menu goes off the bottom edge
+                if (menuRect.bottom > viewportHeight) {
+                    adjustedY = viewportHeight - menuRect.height - 5; // 5px margin
+                }
+
+                // Check if menu goes off the left edge (in case of very wide menu)
+                if (adjustedX < 0) {
+                    adjustedX = 5; // 5px margin
+                }
+
+                // Check if menu goes off the top edge (in case of very tall menu)
+                if (adjustedY < 0) {
+                    adjustedY = 5; // 5px margin
+                }
+
+                // Apply adjusted position
+                contextMenu.style.left = `${adjustedX}px`;
+                contextMenu.style.top = `${adjustedY}px`;
+                
+                // Click outside to close menu
+                const closeMenu = (e) => {
+                    if (!contextMenu.contains(e.target)) {
+                        contextMenu.remove();
+                        document.removeEventListener('mousedown', closeMenu);
+                        document.removeEventListener('keydown', escListener);
+                    }
+                };
+                document.addEventListener('mousedown', closeMenu);
+
+                // Press Escape to close menu
+                const escListener = (e) => {
+                    if (e.key === 'Escape') {
+                        contextMenu.remove();
+                        document.removeEventListener('mousedown', closeMenu);
+                        document.removeEventListener('keydown', escListener);
+                    }
+                };
+                document.addEventListener('keydown', escListener);
             });
             
             chatList.appendChild(chatItem);

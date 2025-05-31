@@ -130,12 +130,13 @@ function createWindow() {
 
 // Function to load a specific chat file
 function loadChatFile(filePath) {
-  fs.readFile(filePath, 'utf-8', (err, data) => {
-    if (err) {
-      console.error('Failed to read file:', err);
-      return;
-    }
+  console.log('Loading chat file:', filePath);
+  
+  try {
+    const data = fs.readFileSync(filePath, 'utf-8');
     const filename = path.basename(filePath, '.json');
+    console.log('Successfully read file:', filename);
+    
     mainWindow.webContents.send('load-json', { filename, filePath, data });
     
     // Clear any existing watcher
@@ -147,17 +148,33 @@ function loadChatFile(filePath) {
     currentWatcher = fs.watch(filePath, (eventType, filename) => {
       if (eventType === 'change') {
         // Read the updated file
-        fs.readFile(filePath, 'utf-8', (err, data) => {
-          if (err) {
-            console.error('Failed to read updated file:', err);
-            return;
-          }
+        try {
+          const updatedData = fs.readFileSync(filePath, 'utf-8');
           // Send the updated data to the renderer
-          mainWindow.webContents.send('file-changed', { filename: path.basename(filePath, '.json'), filePath, data });
-        });
+          mainWindow.webContents.send('file-changed', { 
+            filename: path.basename(filePath, '.json'), 
+            filePath, 
+            data: updatedData 
+          });
+        } catch (err) {
+          console.error('Failed to read updated file:', err);
+        }
       }
     });
-  });
+  } catch (err) {
+    console.error('Failed to load chat file:', err);
+    // Send an error message to the renderer
+    mainWindow.webContents.send('load-json', {
+      filename: 'Error',
+      filePath: null,
+      data: JSON.stringify({
+        messages: [{
+          role: 'system',
+          content: `Error loading file: ${err.message}`
+        }]
+      })
+    });
+  }
 }
 
 // Function to create a timestamped filename
@@ -244,6 +261,37 @@ ipcMain.handle('load-chat', async (event, filePath) => {
   return { success: true };
 });
 
+// Handle deleting a chat
+ipcMain.handle('delete-chat', async (event, filePath) => {
+  try {
+    // Check if the file exists
+    if (!fs.existsSync(filePath)) {
+      return { success: false, error: 'File does not exist' };
+    }
+
+    // Delete the file
+    fs.unlinkSync(filePath);
+    
+    // If this was the currently loaded chat, clear the main window
+    if (currentWatcher && currentWatcher.path === filePath) {
+      mainWindow.webContents.send('load-json', {
+        data: JSON.stringify({ messages: [] }),
+        filePath: null,
+        filename: ''
+      });
+      currentWatcher = null;
+    }
+
+    // Update the chat list
+    sendChatList();
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Error deleting chat:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 // Handle saving updated JSON files
 ipcMain.handle('save-json', async (event, { filePath, jsonData }) => {
   try {
@@ -256,7 +304,7 @@ ipcMain.handle('save-json', async (event, { filePath, jsonData }) => {
         .replace(/[:.]/g, '-')  // Replace colons and periods with hyphens
         .replace('T', '_')      // Replace T with underscore
         .replace('Z', '');      // Remove Z
-      const newFilePath = path.join(path.dirname(filePath), `chat_${timestamp}.json`);
+      const newFilePath = path.join(__dirname, '../../chats', `chat_${timestamp}.json`);
       
       // Set the title to the timestamp
       jsonData.title = timestamp;
@@ -297,7 +345,7 @@ async function saveJsonDataForStreaming(filePath, jsonData) {
         .replace(/[:.]/g, '-')  // Replace colons and periods with hyphens
         .replace('T', '_')      // Replace T with underscore
         .replace('Z', '');      // Remove Z
-      const newFilePath = path.join(path.dirname(filePath), `chat_${timestamp}.json`);
+      const newFilePath = path.join(__dirname, '../../chats', `chat_${timestamp}.json`);
       
       // Set the title to the timestamp
       jsonData.title = timestamp;
@@ -329,7 +377,7 @@ async function saveJsonData(filePath, jsonData) {
         .replace(/[:.]/g, '-')  // Replace colons and periods with hyphens
         .replace('T', '_')      // Replace T with underscore
         .replace('Z', '');      // Remove Z
-      const newFilePath = path.join(path.dirname(filePath), `chat_${timestamp}.json`);
+      const newFilePath = path.join(__dirname, '../../chats', `chat_${timestamp}.json`);
       
       // Set the title to the timestamp
       jsonData.title = timestamp;
@@ -479,18 +527,34 @@ ipcMain.handle('call-openai', async (event, filePath) => {
 
 // Function to load default chat on startup
 function loadDefaultChat() {
-  const defaultPath = path.join(__dirname, '../../chats/default.json');
+  const configDir = path.join(__dirname, '../../config');
+  const defaultPath = path.join(configDir, 'default.json');
+  
+  // Ensure config directory exists
+  if (!fs.existsSync(configDir)) {
+    fs.mkdirSync(configDir, { recursive: true });
+  }
   
   // Check if default.json exists
-  fs.access(defaultPath, fs.constants.F_OK, (err) => {
-    if (err) {
-      console.error('default.json not found:', err);
-      return;
-    }
+  if (!fs.existsSync(defaultPath)) {
+    // Create default template
+    const defaultTemplate = {
+      title: "New Chat",
+      messages: [
+        {
+          role: "system",
+          content: "You are a helpful assistant."
+        }
+      ]
+    };
     
-    // Load the default chat
-    loadChatFile(defaultPath);
-  });
+    // Write default template
+    fs.writeFileSync(defaultPath, JSON.stringify(defaultTemplate, null, 2));
+    console.log('Created default chat template');
+  }
+  
+  // Load the default chat
+  loadChatFile(defaultPath);
 }
 
 app.whenReady()

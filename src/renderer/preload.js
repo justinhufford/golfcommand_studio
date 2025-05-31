@@ -8,5 +8,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onChatList: (callback) => ipcRenderer.on('chat-list', (event, chats) => callback(chats)),
   loadChat: (filePath) => ipcRenderer.invoke('load-chat', filePath),
   callOpenAI: (filePath) => ipcRenderer.invoke('call-openai', filePath),
-  onStreamingUpdate: (callback) => ipcRenderer.on('streaming-update', (event, data) => callback(data))
+  onStreamingUpdate: (callback) => ipcRenderer.on('streaming-update', (event, data) => callback(data)),
+  deleteChat: (filePath) => ipcRenderer.invoke('delete-chat', filePath)
 }); 
