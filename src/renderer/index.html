@@ -1,0 +1,1044 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- Basic meta tags -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GolfCommand</title>
+    <link rel="stylesheet" href="styles.css">
+    <!--JetBrains | Google Fonts-->
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap" rel="stylesheet">
+
+</head>
+<body>
+    <!-- Container for sidebar and main content -->
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <h2 class="sidebar-title">Chats</h2>
+            <div class="sidebar-content">
+                <div id="chat-list">
+                    <!-- Chat list will be populated here -->
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main content wrapper -->
+        <div class="main-wrapper">
+    <!-- Main content -->
+    <main>
+        <h1>GolfCommand</h1>
+        <div class="content">
+                    <!-- Content will be populated from JSON -->
+        </div>
+        <div class="input-bar">
+            <div class="input-wrapper">
+                <span class="input-prompt">&gt; </span>
+                <input type="text" id="user-input" />
+            </div>
+            <button id="send-btn">Send</button>
+        </div>
+    </main>
+        </div>
+    </div>
+    <script>
+    // Make h1 editable
+    const h1 = document.querySelector('h1');
+    let currentJsonData = null;
+    let currentFilePath = null;
+    let showSystemMessages = true;
+    let showToolMessages = true;
+    
+    // Chat list handling
+    const chatList = document.getElementById('chat-list');
+    
+    // Cache for the logo
+    let logoCache = null;
+    
+    // Function to load the logo
+    async function loadLogo() {
+      if (logoCache) return logoCache;
+      
+      try {
+        const response = await fetch('logo.txt');
+        if (!response.ok) throw new Error('Failed to load logo');
+        logoCache = (await response.text()).trim();
+        return logoCache;
+      } catch (error) {
+        console.warn('Failed to load logo from file, using default:', error);
+        logoCache = '𝔊𝔬𝔩𝔣ℭ𝔬𝔪𝔪𝔞𝔫𝔡';
+        return logoCache;
+      }
+    }
+    
+    // Function to render chat list
+    function renderChatList(chats) {
+        chatList.innerHTML = '';
+        
+        if (chats.length === 0) {
+            const emptyMessage = document.createElement('p');
+            emptyMessage.textContent = 'No chats found';
+            chatList.appendChild(emptyMessage);
+            return;
+        }
+        
+        chats.forEach(chat => {
+            const chatItem = document.createElement('p');
+            chatItem.textContent = chat.displayName;
+            chatItem.className = 'chat-item';
+            
+            // Add click handler to load the chat
+            chatItem.addEventListener('click', async () => {
+                try {
+                    await window.electronAPI.loadChat(chat.path);
+                } catch (error) {
+                    console.error('Error loading chat:', error);
+                }
+            });
+            
+            chatList.appendChild(chatItem);
+        });
+    }
+    
+    // Listen for chat list updates
+    window.electronAPI && window.electronAPI.onChatList((chats) => {
+        renderChatList(chats);
+    });
+    
+    // Add input handling
+    const userInput = document.getElementById('user-input');
+    const sendButton = document.getElementById('send-btn');
+
+    async function handleUserInput() {
+        const inputText = userInput.value.trim();
+        if (!inputText || !currentJsonData || !currentFilePath) return;
+
+        // Create new user message
+        const newMessage = {
+            role: 'user',
+            content: inputText
+        };
+
+        // Add message to JSON data
+        currentJsonData.messages.push(newMessage);
+
+        // Save updated JSON
+        try {
+            const result = await window.electronAPI.saveJson(currentFilePath, currentJsonData);
+            if (!result.success) {
+                console.error('Failed to save user message:', result.error);
+                return;
+            }
+            
+            // If we got a new file path (from default.json), update it
+            if (result.newFilePath) {
+                currentFilePath = result.newFilePath;
+            }
+        } catch (error) {
+            console.error('Error saving user message:', error);
+            return;
+        }
+
+        // Clear input field
+        userInput.value = '';
+
+        // Focus input field for next message
+        userInput.focus();
+
+        // Re-render messages and scroll to bottom
+        renderMessages(true);
+        
+        // Call OpenAI to get a response
+        try {
+            const aiResult = await window.electronAPI.callOpenAI(currentFilePath);
+            if (!aiResult.success) {
+                console.error('Failed to get AI response:', aiResult.error);
+                // Optionally show an error message to the user
+            }
+            // The file watcher will automatically update the UI when the AI response is saved
+        } catch (error) {
+            console.error('Error calling OpenAI:', error);
+        }
+    }
+
+    // Handle Enter key press
+    userInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            handleUserInput();
+        }
+    });
+
+    // Handle send button click
+    sendButton.addEventListener('click', handleUserInput);
+    
+    // Function to parse markdown and apply formatting
+    async function parseMarkdown(text, messageRole) {
+      // Only parse when not editing (contentEditable = false)
+      const boldRegex = /\*\*(.*?)\*\*/g;
+      const codeRegex = /`(.*?)`/g;
+      const quoteRegex = /"([^"]+)"/g;
+      
+      // Replace [LOGO] with the actual logo
+      let processedText = text;
+      if (text.includes('[LOGO]')) {
+        const logo = await loadLogo();
+        processedText = text.replace(/\[LOGO\]/g, logo);
+      }
+      
+      // Handle double quotes in assistant messages - do this FIRST before any HTML is added
+      if (messageRole === 'assistant') {
+        processedText = processedText.replace(quoteRegex, (match, content) => {
+          return `<span style="font-style: italic">"${content}"</span>`;
+        });
+      }
+      
+      // Handle square brackets in assistant messages
+      if (messageRole === 'assistant') {
+        processedText = processedText.replace(/\[(.*?)\]/g, (match, content) => {
+          return `<span style="color: var(--color-primary)">[</span><span style="color: var(--color-text)">${content}</span><span style="color: var(--color-primary)">]</span>`;
+        });
+      }
+      
+      // Replace code blocks with accent color
+      processedText = processedText.replace(codeRegex, (match, content) => {
+        return `<span style="color: var(--color-accent); font-style: italic">${content}</span>`;
+      });
+      
+      // Replace **text** with styled spans
+      return processedText.replace(boldRegex, (match, content) => {
+        const upperContent = content.toUpperCase().replace(/ /g, '&nbsp;');
+        if (messageRole === 'assistant' || messageRole === 'user') {
+          return `<span style=\"color: var(--color-text)\">${upperContent}</span>`;
+        }
+        return upperContent;
+      });
+    }
+    
+    // Function to highlight markdown when editing
+    function highlightMarkdownForEditing(text, messageRole) {
+      // Highlight markdown characters in red and apply role-specific styling
+      const boldRegex = /(\*\*)(.*?)(\*\*)/g;
+      const codeRegex = /(`)(.*?)(`)/g;
+      const quoteRegex = /"([^"]+)"/g;
+      
+      // First replace the logo with [LOGO]
+      let processedText = text;
+      if (logoCache) {
+        processedText = text.replace(new RegExp(logoCache.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '[LOGO]');
+      }
+      
+      // Handle double quotes in assistant messages - do this FIRST
+      if (messageRole === 'assistant') {
+        processedText = processedText.replace(quoteRegex, (match, content) => {
+          return `<span style="font-style: italic">"${content}"</span>`;
+        });
+      }
+      
+      // Handle square brackets in assistant messages
+      if (messageRole === 'assistant') {
+        processedText = processedText.replace(/\[(.*?)\]/g, (match, content) => {
+          return `<span style="color: var(--color-primary)">[</span><span style="color: var(--color-text)">${content}</span><span style="color: var(--color-primary)">]</span>`;
+        });
+      }
+      
+      // Handle code blocks
+      processedText = processedText.replace(codeRegex, (match, openTick, content, closeTick) => {
+        return `<span style="color: var(--color-accent)">${openTick}</span><span style="color: var(--color-accent); font-style: italic">${content}</span><span style="color: var(--color-accent)">${closeTick}</span>`;
+      });
+      
+      return processedText.replace(boldRegex, (match, openAsterisk, content, closeAsterisk) => {
+        let contentColor = '';
+        if (messageRole === 'assistant' || messageRole === 'user') {
+          contentColor = 'var(--color-text)';
+        } else if (messageRole === 'system') {
+          contentColor = 'var(--color-system)';
+        }
+        const contentStyle = contentColor ? ` style=\"color: ${contentColor}\"` : '';
+        const safeContent = content.replace(/ /g, '&nbsp;');
+        return `<span style=\"color: var(--color-accent)\">${openAsterisk}</span><span${contentStyle}>${safeContent}</span><span style=\"color: var(--color-accent)\">${closeAsterisk}</span>`;
+      });
+    }
+    
+    // Function to render messages with current filter settings
+    async function renderMessages(shouldScroll = false) {
+      const content = document.querySelector('.content');
+      if (!content || !currentJsonData || !currentJsonData.messages) return;
+      
+      content.innerHTML = '';
+      
+      for (const [index, message] of currentJsonData.messages.entries()) {
+        // Skip system messages if disabled
+        if (message.role === 'system' && !showSystemMessages) continue;
+        
+        // Skip tool messages if disabled
+        if ((message.role === 'assistant' && message.tool_calls) || 
+            message.role === 'tool') {
+          if (!showToolMessages) continue;
+        }
+        
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message';
+        messageDiv.contentEditable = false; // Start as non-editable
+        messageDiv.draggable = true; // Make draggable
+        messageDiv.dataset.messageIndex = index; // Store original index
+        
+        // Store the raw content for editing
+        let rawContent = '';
+        let isEditing = false; // Track if we're in edit mode
+        
+        // Handle different message types
+        if (message.role === 'system') {
+          messageDiv.classList.add('message-system');
+          // Check if content is JSON
+          try {
+            const jsonContent = JSON.parse(message.content);
+            // Format the JSON content in a more readable way
+            const formattedContent = Object.entries(jsonContent)
+              .map(([key, value]) => {
+                if (Array.isArray(value)) {
+                  return `${key}: [${value.join(', ')}]`;
+                }
+                return `${key}: ${value}`;
+              })
+              .join('\n');
+            rawContent = formattedContent;
+            messageDiv.innerHTML = await parseMarkdown(formattedContent, message.role);
+          } catch (e) {
+            // If not JSON, display as normal text
+            rawContent = message.content;
+            const displayContent = message.content.trim() === '' ? '…' : message.content;
+            messageDiv.innerHTML = await parseMarkdown(displayContent, message.role);
+          }
+        } else if (message.role === 'assistant') {
+          // Check if it's a tool call
+          if (message.tool_calls && message.tool_calls.length > 0) {
+            messageDiv.classList.add('message-tool-call');
+            const toolCall = message.tool_calls[0];
+            rawContent = `${toolCall.function.name}: ${toolCall.function.arguments}`;
+            messageDiv.textContent = rawContent; // No markdown parsing for tool calls
+          } else {
+            messageDiv.classList.add('message-assistant');
+            rawContent = message.content;
+            const displayContent = message.content.trim() === '' ? '…' : message.content;
+            messageDiv.innerHTML = await parseMarkdown(displayContent, message.role);
+          }
+        } else if (message.role === 'user') {
+          messageDiv.classList.add('message-user');
+          rawContent = message.content;
+          // Render without converting to uppercase
+          const displayContent = message.content.trim() === '' ? '…' : message.content;
+          messageDiv.innerHTML = await parseMarkdown(displayContent, message.role);
+        } else if (message.role === 'tool') {
+          messageDiv.classList.add('message-tool-response');
+          rawContent = message.content;
+          const displayContent = message.content.trim() === '' ? '…' : message.content;
+          messageDiv.textContent = displayContent; // No markdown parsing for tool responses
+        }
+        
+        // Add click handler to make message editable
+        messageDiv.addEventListener('click', (e) => {
+          e.stopPropagation(); // Prevent event bubbling
+          if (!messageDiv.contentEditable || messageDiv.contentEditable === 'false') {
+            messageDiv.contentEditable = true;
+            messageDiv.focus();
+          }
+        });
+        
+        // Add drag and drop handlers
+        messageDiv.addEventListener('dragstart', (e) => {
+          e.dataTransfer.setData('text/plain', index);
+          messageDiv.classList.add('dragging');
+        });
+        
+        messageDiv.addEventListener('dragend', (e) => {
+          messageDiv.classList.remove('dragging');
+          // Remove any drop indicators
+          document.querySelectorAll('.drop-indicator').forEach(el => el.remove());
+        });
+        
+        messageDiv.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          const draggingElement = document.querySelector('.dragging');
+          if (!draggingElement || draggingElement === messageDiv) return;
+          
+          // Remove existing drop indicators
+          document.querySelectorAll('.drop-indicator').forEach(el => el.remove());
+          
+          // Determine if we should show indicator above or below
+          const rect = messageDiv.getBoundingClientRect();
+          const midpoint = rect.top + rect.height / 2;
+          const isAbove = e.clientY < midpoint;
+          
+          // Create drop indicator
+          const indicator = document.createElement('div');
+          indicator.className = 'drop-indicator';
+          indicator.textContent = '--- Drop here ---';
+          
+          if (isAbove) {
+            messageDiv.parentNode.insertBefore(indicator, messageDiv);
+          } else {
+            messageDiv.parentNode.insertBefore(indicator, messageDiv.nextSibling);
+          }
+        });
+        
+        messageDiv.addEventListener('drop', (e) => {
+          e.preventDefault();
+          const draggedIndex = parseInt(e.dataTransfer.getData('text/plain'));
+          const targetIndex = parseInt(messageDiv.dataset.messageIndex);
+          
+          if (draggedIndex === targetIndex) return;
+          
+          // Determine drop position
+          const rect = messageDiv.getBoundingClientRect();
+          const midpoint = rect.top + rect.height / 2;
+          const isAbove = e.clientY < midpoint;
+          let newIndex = targetIndex;
+          
+          if (!isAbove && draggedIndex < targetIndex) {
+            newIndex = targetIndex;
+          } else if (!isAbove && draggedIndex > targetIndex) {
+            newIndex = targetIndex + 1;
+          } else if (isAbove && draggedIndex < targetIndex) {
+            newIndex = targetIndex - 1;
+          } else if (isAbove && draggedIndex > targetIndex) {
+            newIndex = targetIndex;
+          }
+          
+          // Reorder messages in JSON
+          const draggedMessage = currentJsonData.messages.splice(draggedIndex, 1)[0];
+          currentJsonData.messages.splice(newIndex, 0, draggedMessage);
+          
+          // Save and re-render
+          saveAndRerender();
+        });
+        
+        // Add right-click context menu handler
+        messageDiv.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          
+          // Remove any existing context menus
+          document.querySelectorAll('.context-menu').forEach(el => el.remove());
+          
+          // Create context menu
+          const contextMenu = document.createElement('div');
+          contextMenu.className = 'context-menu';
+          contextMenu.style.position = 'fixed';
+          contextMenu.style.left = `${e.clientX}px`;
+          contextMenu.style.top = `${e.clientY}px`;
+          
+          // Add duplicate option
+          const duplicateOption = document.createElement('div');
+          duplicateOption.className = 'context-menu-item';
+          duplicateOption.textContent = 'Duplicate';
+          duplicateOption.addEventListener('click', async () => {
+            // Get the current message index
+            const msgIndex = parseInt(messageDiv.dataset.messageIndex);
+            
+            // Create a copy of the message
+            const messageCopy = JSON.parse(JSON.stringify(currentJsonData.messages[msgIndex]));
+            
+            // Insert the copy after the original
+            currentJsonData.messages.splice(msgIndex + 1, 0, messageCopy);
+            
+            // Save the updated JSON
+            try {
+              const result = await window.electronAPI.saveJson(currentFilePath, currentJsonData);
+              if (!result.success) {
+                console.error('Failed to duplicate message:', result.error);
+              }
+            } catch (error) {
+              console.error('Error duplicating message:', error);
+            }
+            
+            // Remove context menu
+            contextMenu.remove();
+          });
+          
+          // Add delete option
+          const deleteOption = document.createElement('div');
+          deleteOption.className = 'context-menu-item';
+          deleteOption.textContent = 'Delete';
+          deleteOption.addEventListener('click', async () => {
+            const msgIndex = parseInt(messageDiv.dataset.messageIndex);
+            currentJsonData.messages.splice(msgIndex, 1);
+            try {
+              const result = await window.electronAPI.saveJson(currentFilePath, currentJsonData);
+              if (!result.success) {
+                console.error('Failed to delete message:', result.error);
+              }
+            } catch (error) {
+              console.error('Error deleting message:', error);
+            }
+            contextMenu.remove();
+          });
+          
+          // Add change role option (only for assistant, user, system messages)
+          const currentMessage = currentJsonData.messages[parseInt(messageDiv.dataset.messageIndex)];
+          if (['assistant', 'user', 'system'].includes(currentMessage.role) && !currentMessage.tool_calls) {
+            const changeRoleOption = document.createElement('div');
+            changeRoleOption.className = 'context-menu-item context-menu-submenu';
+            changeRoleOption.textContent = 'Change Role ▶';
+            
+            // Create submenu
+            const submenu = document.createElement('div');
+            submenu.className = 'context-submenu';
+            
+            const roles = [
+              { value: 'assistant', label: 'Assistant' },
+              { value: 'user', label: 'User' },
+              { value: 'system', label: 'System' }
+            ];
+            
+            roles.forEach(role => {
+              if (role.value !== currentMessage.role) { // Don't show current role
+                const roleOption = document.createElement('div');
+                roleOption.className = 'context-menu-item';
+                roleOption.textContent = role.label;
+                roleOption.addEventListener('click', async () => {
+                  const msgIndex = parseInt(messageDiv.dataset.messageIndex);
+                  currentJsonData.messages[msgIndex].role = role.value;
+                  try {
+                    const result = await window.electronAPI.saveJson(currentFilePath, currentJsonData);
+                    if (!result.success) {
+                      console.error('Failed to change role:', result.error);
+                    }
+                  } catch (error) {
+                    console.error('Error changing role:', error);
+                  }
+                  contextMenu.remove();
+                });
+                submenu.appendChild(roleOption);
+              }
+            });
+            
+            changeRoleOption.appendChild(submenu);
+            contextMenu.appendChild(changeRoleOption);
+          }
+          
+          // Add message below option
+          const addMessageOption = document.createElement('div');
+          addMessageOption.className = 'context-menu-item';
+          addMessageOption.textContent = 'Add Message Below';
+          addMessageOption.addEventListener('click', async () => {
+            const msgIndex = parseInt(messageDiv.dataset.messageIndex);
+            
+            // Create a new blank assistant message
+            const newMessage = {
+              role: 'assistant',
+              content: ''
+            };
+            
+            // Insert the new message after the current one
+            currentJsonData.messages.splice(msgIndex + 1, 0, newMessage);
+            
+            // Save the updated JSON
+            try {
+              const result = await window.electronAPI.saveJson(currentFilePath, currentJsonData);
+              if (!result.success) {
+                console.error('Failed to add message:', result.error);
+              }
+            } catch (error) {
+              console.error('Error adding message:', error);
+            }
+            
+            // Remove context menu
+            contextMenu.remove();
+          });
+
+          // Add tool call option
+          const addToolCallOption = document.createElement('div');
+          addToolCallOption.className = 'context-menu-item';
+          addToolCallOption.textContent = 'Add Tool Call Below';
+          addToolCallOption.addEventListener('click', async () => {
+            const msgIndex = parseInt(messageDiv.dataset.messageIndex);
+            
+            // Create a new blank tool call message
+            const newToolCall = {
+              role: 'assistant',
+              tool_calls: [{
+                id: 'c' + Date.now(), // Generate a unique ID
+                type: 'function',
+                function: {
+                  name: '',
+                  arguments: '{}'
+                }
+              }]
+            };
+
+            // Create a new blank tool response message
+            const newToolResponse = {
+              role: 'tool',
+              tool_call_id: newToolCall.tool_calls[0].id,
+              content: ''
+            };
+            
+            // Insert both messages after the current one
+            currentJsonData.messages.splice(msgIndex + 1, 0, newToolCall, newToolResponse);
+            
+            // Save the updated JSON
+            try {
+              const result = await window.electronAPI.saveJson(currentFilePath, currentJsonData);
+              if (!result.success) {
+                console.error('Failed to add tool call:', result.error);
+              }
+            } catch (error) {
+              console.error('Error adding tool call:', error);
+            }
+            
+            // Remove context menu
+            contextMenu.remove();
+          });
+          
+          contextMenu.appendChild(duplicateOption);
+          contextMenu.appendChild(deleteOption);
+          contextMenu.appendChild(addMessageOption);
+          contextMenu.appendChild(addToolCallOption);
+          
+          document.body.appendChild(contextMenu);
+
+          // Adjust position to keep menu within viewport
+          const menuRect = contextMenu.getBoundingClientRect();
+          const viewportWidth = window.innerWidth;
+          const viewportHeight = window.innerHeight;
+
+          let adjustedX = e.clientX;
+          let adjustedY = e.clientY;
+
+          // Check if menu goes off the right edge
+          if (menuRect.right > viewportWidth) {
+            adjustedX = viewportWidth - menuRect.width - 5; // 5px margin
+          }
+
+          // Check if menu goes off the bottom edge
+          if (menuRect.bottom > viewportHeight) {
+            adjustedY = viewportHeight - menuRect.height - 5; // 5px margin
+          }
+
+          // Check if menu goes off the left edge (in case of very wide menu)
+          if (adjustedX < 0) {
+            adjustedX = 5; // 5px margin
+          }
+
+          // Check if menu goes off the top edge (in case of very tall menu)
+          if (adjustedY < 0) {
+            adjustedY = 5; // 5px margin
+          }
+
+          // Apply adjusted position
+          contextMenu.style.left = `${adjustedX}px`;
+          contextMenu.style.top = `${adjustedY}px`;
+          
+          // Click outside to close menu
+          const closeMenu = (e) => {
+            if (!contextMenu.contains(e.target)) {
+              contextMenu.remove();
+              document.removeEventListener('mousedown', closeMenu);
+              document.removeEventListener('keydown', escListener);
+            }
+          };
+          document.addEventListener('mousedown', closeMenu);
+
+          // Press Escape to close menu
+          const escListener = (e) => {
+            if (e.key === 'Escape') {
+              contextMenu.remove();
+              document.removeEventListener('mousedown', closeMenu);
+              document.removeEventListener('keydown', escListener);
+            }
+          };
+          document.addEventListener('keydown', escListener);
+        });
+        
+        // Add focus handler to show raw content for editing
+        messageDiv.addEventListener('focus', () => {
+          isEditing = true; // Mark as editing
+          if (message.role === 'tool' || (message.role === 'assistant' && message.tool_calls)) {
+            // For tool calls and responses, just show raw text
+            messageDiv.textContent = rawContent;
+          } else {
+            // For other messages, show with markdown highlighting
+            messageDiv.innerHTML = highlightMarkdownForEditing(rawContent, message.role);
+          }
+          // Set cursor position to the end
+          const range = document.createRange();
+          const sel = window.getSelection();
+          range.selectNodeContents(messageDiv);
+          range.collapse(false);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        });
+        
+        // Add input handler for live markdown highlighting
+        messageDiv.addEventListener('input', () => {
+          // Skip live highlighting for tool calls and responses
+          if (message.role === 'tool' || (message.role === 'assistant' && message.tool_calls)) {
+            return; // Just let the text stay as plain text
+          }
+          
+          // Get cursor position before update
+          const sel = window.getSelection();
+          let cursorPos = 0;
+          
+          if (sel.rangeCount > 0) {
+            const range = sel.getRangeAt(0);
+            const preCaretRange = range.cloneRange();
+            preCaretRange.selectNodeContents(messageDiv);
+            preCaretRange.setEnd(range.endContainer, range.endOffset);
+            cursorPos = preCaretRange.toString().length;
+          }
+          
+          // Get current text and re-apply highlighting
+          const currentText = messageDiv.innerText;
+          messageDiv.innerHTML = highlightMarkdownForEditing(currentText, message.role);
+          
+          // Restore cursor position
+          try {
+            let charCount = 0;
+            const setCaretPosition = (node, offset) => {
+              const range = document.createRange();
+              range.setStart(node, offset);
+              range.collapse(true);
+              sel.removeAllRanges();
+              sel.addRange(range);
+            };
+            
+            const traverseNodes = (node) => {
+              if (node.nodeType === Node.TEXT_NODE) {
+                const nodeLength = node.textContent.length;
+                if (charCount + nodeLength >= cursorPos) {
+                  setCaretPosition(node, cursorPos - charCount);
+                  return true;
+                }
+                charCount += nodeLength;
+              } else {
+                for (const child of node.childNodes) {
+                  if (traverseNodes(child)) return true;
+                }
+              }
+              return false;
+            };
+            
+            traverseNodes(messageDiv);
+          } catch (e) {
+            console.error('Error restoring cursor position:', e);
+          }
+        });
+        
+        // Add blur handler to save changes
+        messageDiv.addEventListener('blur', async () => {
+          // Only process if we were actually editing
+          if (!isEditing) return;
+          
+          const newContent = messageDiv.innerText.trim(); // Use innerText to get text without HTML
+          rawContent = newContent; // Update raw content
+          isEditing = false; // No longer editing
+          messageDiv.contentEditable = false; // Make non-editable again
+          
+          // Get the message index
+          const msgIndex = parseInt(messageDiv.dataset.messageIndex);
+          
+          // Handle different message types for saving
+          if (message.role === 'system') {
+            // For system messages, try to parse as JSON if it looks like JSON
+            try {
+              if (newContent.includes('{') && newContent.includes('}')) {
+                const jsonContent = JSON.parse(newContent);
+                currentJsonData.messages[msgIndex].content = JSON.stringify(jsonContent);
+              } else {
+                currentJsonData.messages[msgIndex].content = newContent;
+              }
+            } catch (e) {
+              currentJsonData.messages[msgIndex].content = newContent;
+            }
+          } else if (message.role === 'assistant' && message.tool_calls) {
+            // For tool calls, try to parse the new content
+            try {
+              const colonIndex = newContent.indexOf(':');
+              if (colonIndex !== -1) {
+                const funcName = newContent.slice(0, colonIndex).trim();
+                const args = newContent.slice(colonIndex + 1).trim();
+                currentJsonData.messages[msgIndex].tool_calls[0].function.name = funcName;
+                currentJsonData.messages[msgIndex].tool_calls[0].function.arguments = args;
+              }
+            } catch (e) {
+              console.error('Error parsing tool call:', e);
+            }
+          } else if (message.role === 'user') {
+            // For user messages, store the content without converting to uppercase
+            currentJsonData.messages[msgIndex].content = newContent;
+            messageDiv.innerHTML = await parseMarkdown(newContent, message.role);
+          } else {
+            // For other messages, store the content and re-apply markdown parsing
+            currentJsonData.messages[msgIndex].content = newContent;
+            messageDiv.innerHTML = await parseMarkdown(newContent, message.role);
+          }
+          
+          // Save the updated file
+          try {
+            const result = await window.electronAPI.saveJson(currentFilePath, currentJsonData);
+            if (!result.success) {
+              console.error('Failed to save message:', result.error);
+            } else if (result.newFilePath) {
+              // Update current file path if we got a new one (from default.json)
+              currentFilePath = result.newFilePath;
+            }
+          } catch (error) {
+            console.error('Error saving message:', error);
+          }
+        });
+        
+        // Add keydown handler for Enter and Escape
+        messageDiv.addEventListener('keydown', async (e) => {
+          if (e.key === 'Enter') {
+            if (e.shiftKey) {
+              // Allow Shift+Enter for line breaks
+              return;
+            }
+            e.preventDefault();
+            messageDiv.blur();
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            isEditing = false; // Reset editing flag
+            messageDiv.contentEditable = false; // Make non-editable again
+            // Restore original content
+            if (message.role === 'system') {
+              try {
+                const jsonContent = JSON.parse(message.content);
+                const formattedContent = Object.entries(jsonContent)
+                  .map(([key, value]) => {
+                    if (Array.isArray(value)) {
+                      return `${key}: [${value.join(', ')}]`;
+                    }
+                    return `${key}: ${value}`;
+                  })
+                  .join('\n');
+                rawContent = formattedContent;
+                messageDiv.innerHTML = await parseMarkdown(formattedContent, message.role);
+              } catch (e) {
+                rawContent = message.content;
+                const displayContent = message.content.trim() === '' ? '…' : message.content;
+                messageDiv.innerHTML = await parseMarkdown(displayContent, message.role);
+              }
+            } else if (message.role === 'assistant' && message.tool_calls) {
+              const toolCall = message.tool_calls[0];
+              rawContent = `${toolCall.function.name}: ${toolCall.function.arguments}`;
+              messageDiv.textContent = rawContent; // No markdown for tool calls
+            } else if (message.role === 'user') {
+              rawContent = message.content;
+              const displayContent = message.content.trim() === '' ? '…' : message.content;
+              messageDiv.innerHTML = await parseMarkdown(displayContent, message.role);
+            } else if (message.role === 'assistant') {
+              rawContent = message.content;
+              const displayContent = message.content.trim() === '' ? '…' : message.content;
+              messageDiv.innerHTML = await parseMarkdown(displayContent, message.role);
+            } else {
+              rawContent = message.content;
+              const displayContent = message.content.trim() === '' ? '…' : message.content;
+              messageDiv.innerHTML = await parseMarkdown(displayContent, message.role);
+            }
+            messageDiv.blur();
+          }
+        });
+        
+        content.appendChild(messageDiv);
+      }
+
+      // Only scroll if explicitly requested
+      if (shouldScroll) {
+        content.scrollTop = content.scrollHeight;
+      }
+    }
+    
+    // Helper function to save JSON and re-render messages
+    async function saveAndRerender() {
+      try {
+        const result = await window.electronAPI.saveJson(currentFilePath, currentJsonData);
+        if (result.success) {
+          renderMessages();
+        } else {
+          console.error('Failed to save reordered messages:', result.error);
+        }
+      } catch (error) {
+        console.error('Error saving reordered messages:', error);
+      }
+    }
+    
+    // Add click handler to content area for deselecting messages
+    document.querySelector('.content').addEventListener('click', (e) => {
+      // If the click target is the content area itself (not a message), blur any focused element
+      if (e.target.classList.contains('content')) {
+        document.activeElement.blur();
+      }
+    });
+    
+    h1.addEventListener('click', () => {
+      // Only make editable if we have a loaded file
+      if (currentJsonData) {
+        h1.contentEditable = true;
+        h1.focus();
+        // Select all text when clicking to edit
+        const range = document.createRange();
+        range.selectNodeContents(h1);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+    });
+    
+    h1.addEventListener('blur', async () => {
+      h1.contentEditable = false;
+      const newTitle = h1.textContent.trim();
+      
+      // If we have a current file loaded and the title changed, update it
+      if (currentJsonData && newTitle !== currentJsonData.title) {
+        currentJsonData.title = newTitle;
+        
+        try {
+          const result = await window.electronAPI.saveJson(currentFilePath, currentJsonData);
+          if (result.success) {
+            console.log('Title updated successfully');
+          } else {
+            console.error('Failed to save title:', result.error);
+          }
+        } catch (error) {
+          console.error('Error saving title:', error);
+        }
+      }
+    });
+    
+    h1.addEventListener('keydown', (e) => {
+      // Save on Enter key
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        h1.blur();
+      }
+      // Cancel on Escape key
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        h1.textContent = currentJsonData ? currentJsonData.title : 'GolfCommand';
+        h1.blur();
+      }
+    });
+
+    // JSON loading - update content area and title
+    window.electronAPI && window.electronAPI.onLoadJson((payload) => {
+      try {
+        currentJsonData = JSON.parse(payload.data);
+        currentFilePath = payload.filePath;
+        
+        // Update title from JSON
+        if (currentJsonData.title) {
+          h1.textContent = currentJsonData.title;
+        } else {
+          h1.textContent = payload.filename;
+        }
+        
+        // Render messages without scrolling
+        renderMessages(false);
+      } catch (error) {
+        console.error('Error parsing JSON:', error);
+        h1.textContent = payload.filename;
+        const content = document.querySelector('.content');
+        if (content) {
+          content.innerHTML = `<pre class="message message-system">Error loading file: ${error.message}</pre>`;
+        }
+      }
+    });
+
+    // Handle message visibility toggles
+    window.electronAPI && window.electronAPI.onToggleSystemMessages((show) => {
+      showSystemMessages = show;
+      if (currentJsonData) {
+      renderMessages();
+      }
+    });
+
+    window.electronAPI && window.electronAPI.onToggleToolMessages((show) => {
+      showToolMessages = show;
+      if (currentJsonData) {
+      renderMessages();
+      }
+    });
+
+    // Handle external file changes
+    window.electronAPI && window.electronAPI.onFileChanged((payload) => {
+      try {
+        currentJsonData = JSON.parse(payload.data);
+        currentFilePath = payload.filePath;
+        
+        // Update title from JSON
+        if (currentJsonData.title) {
+          h1.textContent = currentJsonData.title;
+        } else {
+          h1.textContent = payload.filename;
+        }
+        
+        // Render messages without scrolling
+        renderMessages(false);
+        
+        console.log('File updated externally, reloaded content');
+      } catch (error) {
+        console.error('Error parsing updated JSON:', error);
+      }
+    });
+
+    // Handle streaming updates
+    window.electronAPI && window.electronAPI.onStreamingUpdate((update) => {
+      if (!currentJsonData || !currentJsonData.messages) return;
+      
+      const { messageIndex, content, isComplete } = update;
+      
+      // Update the message content in our local data
+      if (currentJsonData.messages[messageIndex]) {
+        currentJsonData.messages[messageIndex].content = content;
+        
+        // Check if this is a new message that needs to be added to the DOM
+        const messageElements = document.querySelectorAll('.message');
+        const messageElement = Array.from(messageElements).find(el => 
+          parseInt(el.dataset.messageIndex) === messageIndex
+        );
+        
+        if (!messageElement) {
+          // Message doesn't exist in DOM yet, trigger a re-render to create it
+          renderMessages(true);
+        } else {
+          // Update the existing message element
+          updateStreamingMessage(messageIndex, content, isComplete);
+          
+          // Auto-scroll to bottom during streaming - use setTimeout to ensure DOM updates first
+          setTimeout(() => {
+            const content = document.querySelector('.content');
+            if (content) {
+              content.scrollTop = content.scrollHeight;
+            }
+          }, 0);
+        }
+      }
+    });
+
+    // Function to update a specific message during streaming
+    async function updateStreamingMessage(messageIndex, content, isComplete) {
+      const messageElements = document.querySelectorAll('.message');
+      const messageElement = Array.from(messageElements).find(el => 
+        parseInt(el.dataset.messageIndex) === messageIndex
+      );
+      
+      if (messageElement) {
+        // Add streaming indicator class if not complete
+        if (!isComplete) {
+          messageElement.classList.add('streaming');
+        } else {
+          messageElement.classList.remove('streaming');
+        }
+        
+        // Update content with markdown parsing
+        const displayContent = content.trim() === '' ? '…' : content;
+        messageElement.innerHTML = await parseMarkdown(displayContent, 'assistant');
+      }
+    }
+    </script>
+</body>
+</html> 
