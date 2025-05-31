@@ -21,7 +21,8 @@ const openai = new OpenAI({
 });
 
 // Set up file structure
-fs.mkdirSync(path.join(__dirname, '../../chats'));
+if (!fs.existsSync(path.join(__dirname, '../../chats')))
+  fs.mkdirSync(path.join(__dirname, '../../chats'));
 
 function createWindow() {
   mainWindow = new BrowserWindow({
