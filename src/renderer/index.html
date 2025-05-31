@@ -1014,7 +1014,7 @@
     // JSON loading - update content area and title
     window.electronAPI && window.electronAPI.onLoadJson((payload) => {
       try {
-        currentJsonData = JSON.parse(payload.data);
+        currentJsonData = JSON.parse(payload.data || '{}');
         currentFilePath = payload.filePath;
         
         // Update title from JSON
@@ -1040,21 +1040,22 @@
     window.electronAPI && window.electronAPI.onToggleSystemMessages((show) => {
       showSystemMessages = show;
       if (currentJsonData) {
-      renderMessages();
+        renderMessages();
       }
     });
 
     window.electronAPI && window.electronAPI.onToggleToolMessages((show) => {
       showToolMessages = show;
       if (currentJsonData) {
-      renderMessages();
+        renderMessages();
       }
     });
 
     // Handle external file changes
     window.electronAPI && window.electronAPI.onFileChanged((payload) => {
       try {
-        currentJsonData = JSON.parse(payload.data);
+        console.dir(payload);
+        currentJsonData = JSON.parse(payload.data || '{}');
         currentFilePath = payload.filePath;
         
         // Update title from JSON

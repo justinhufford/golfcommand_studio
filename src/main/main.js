@@ -456,6 +456,26 @@ ipcMain.handle('call-openai', async (event, filePath) => {
       messages: messages,
       stream: true,
       temperature: 0.7,
+        tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'get_weather',
+            description: 'Gets the weather for a location',
+            parameters: {
+              type: 'object',
+              properties: {
+                location: {
+                  type: 'string',
+                  description: 'City and country to get the weather for'
+                }
+              },
+              required: ['location']
+            }
+          }
+        }
+      ],
+      tool_choice: 'auto'
     });
 
     console.log('OpenAI stream created, starting to process tokens...');
@@ -464,10 +484,12 @@ ipcMain.handle('call-openai', async (event, filePath) => {
     let lastSaveTime = Date.now();
     const SAVE_INTERVAL = 3000; // Increased to 3 seconds to reduce I/O
     let tokenCount = 0;
+    const toolCallData = [];
     
     // Process the stream
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content || '';
+      const toolCalls = chunk.choices[0]?.delta?.tool_calls || '';
       
       if (content) {
         tokenCount++;
@@ -501,9 +523,32 @@ ipcMain.handle('call-openai', async (event, filePath) => {
           }
         }
       }
+
+      if (toolCalls) {
+        for (const chunk of toolCalls) {
+          const item = toolCallData[chunk.index];
+          if (item) {
+            // Does this need to be generalized?
+            toolCallData[chunk.index].function.arguments += chunk.function.arguments;
+          } else {
+            toolCallData[chunk.index] = chunk;
+          }
+        }
+      }
     }
     
     console.log(`Streaming completed. Total tokens: ${tokenCount}, Final content length: ${fullContent.length}`);
+    if (toolCallData.length) {
+      for (const toolCall of toolCallData) {
+        const result = handleToolCall(toolCall);
+        const message = {
+            "type": "function_call_output",
+            "call_id": toolCall.id,
+            "output": result.toString()
+        }
+        // TODO: Pass this back to the AI and keep going.
+      }
+    }
     
     // Final save and completion signal - use full save function for final save
     const result = await saveJsonData(filePath, chatData);
@@ -559,6 +604,23 @@ function loadDefaultChat() {
   
   // Load the default chat
   loadChatFile(defaultPath);
+}
+
+function handleToolCall(toolCall) {
+  if (toolCall.type !== 'function') {
+    throw 'Expected a function call.';
+  }
+
+  const name = toolCall.function.name;
+  const args = toolCall.function.arguments;
+
+  switch (name) {
+    case 'get_weather':
+      return 'Tornado watch!'
+    default:
+      console.error(`Unknown function '${name}'.`);
+      break;
+  }
 }
 
 app.whenReady()
